@@ -35,7 +35,7 @@ plpData <- PatientLevelPrediction::getPlpData(
   restrictPlpDataSettings = PatientLevelPrediction::createRestrictPlpDataSettings()
 )
 
-modelSettings <- setExaoneTabular(device = "cuda", seed = 0L)
+modelSettings <- setExaoneTabular()
 plpResults <- PatientLevelPrediction::runPlp(
   plpData = plpData,
   outcomeId = 3,

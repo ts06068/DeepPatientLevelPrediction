@@ -30,11 +30,11 @@
 #' The official runtime performs preprocessing and feature selection within each
 #' training partition. Saved models include the fitted context and preprocessing.
 #'
-#' @param device Device used by EXAONE-Tabular, for example "cpu" or "cuda".
+#' @param device Device used by EXAONE-Tabular, for example "cuda" (default) or "cpu".
 #' @param seed Random seed for the model.
 #' @return A modelSettings object for PatientLevelPrediction::runPlp().
 #' @export
-setExaoneTabular <- function(device = "cpu", seed = 0L) {
+setExaoneTabular <- function(device = "cuda", seed = 0L) {
   checkIsClass(device, "character")
   checkIsClass(seed, c("integer", "numeric"))
   if (length(device) != 1 || length(seed) != 1 || !is.finite(seed) ||
@@ -92,8 +92,12 @@ fitExaoneTabular <- function(trainData, modelSettings, analysisId, analysisPath,
 
   modelLocation <- PatientLevelPrediction::createTempModelLoc()
   dir.create(modelLocation, recursive = TRUE, showWarnings = FALSE)
-  # A state_dict alone omits EXAONE's context, preprocessing and selected columns.
-  torch$save(result$model, file.path(modelLocation, "ExaoneTabularModel.pt"))
+  path <- system.file("python", package = "DeepPatientLevelPrediction")
+  exaone <- reticulate::import_from_path("ExaoneTabular", path = path)
+  exaone$save_exaone_tabular(
+    result$model,
+    file.path(modelLocation, "ExaoneTabularModel.pt")
+  )
   result$model <- modelLocation
   return(result)
 }
@@ -102,14 +106,16 @@ trainExaoneTabular <- function(dataMatrix, labels, hyperParameters, settings) {
   if (anyNA(labels$outcomeCount) || !all(labels$outcomeCount %in% c(0, 1))) {
     stop("EXAONE-Tabular requires binary outcomeCount values (0 or 1)")
   }
-  exaone <- reticulate::import("exaonetabular")
-  model <- exaone$EXAONETabularClassifier$from_pretrained(
+  path <- system.file("python", package = "DeepPatientLevelPrediction")
+  exaone <- reticulate::import_from_path("ExaoneTabular", path = path)
+  trainX <- toExaoneMatrix(dataMatrix)
+  trainY <- as.array(labels$outcomeCount)
+  model <- exaone$fit_exaone_tabular(
+    features = trainX,
+    targets = trainY,
     device = hyperParameters$device,
     seed = settings$seed
   )
-  trainX <- toExaoneMatrix(dataMatrix)
-  trainY <- as.array(labels$outcomeCount)
-  model$fit(trainX, trainY)
   return(model)
 }
 
@@ -122,6 +128,8 @@ trainExaoneTabular <- function(dataMatrix, labels, hyperParameters, settings) {
 #' @return The cohort with predicted probabilities in the value column.
 #' @export
 predictExaoneTabular <- function(plpModel, data, cohort) {
+  path <- system.file("python", package = "DeepPatientLevelPrediction")
+  exaone <- reticulate::import_from_path("ExaoneTabular", path = path)
   if (inherits(data, "plpData")) {
     matrixObjects <- PatientLevelPrediction::toSparseM(
       plpData = data,
@@ -136,9 +144,8 @@ predictExaoneTabular <- function(plpModel, data, cohort) {
   if (inherits(plpModel, "plpModel")) {
     model <- plpModel$model
     if (is.character(model)) {
-      model <- torch$load(
-        file.path(model, "ExaoneTabularModel.pt"),
-        weights_only = FALSE
+      model <- exaone$load_exaone_tabular(
+        file.path(model, "ExaoneTabularModel.pt")
       )
     }
   } else {
@@ -146,9 +153,8 @@ predictExaoneTabular <- function(plpModel, data, cohort) {
   }
 
   prediction <- cohort
-  probabilities <- model$predict_proba(toExaoneMatrix(data))
-  positiveClass <- match(1, model$classes_)
-  prediction$value <- probabilities[, positiveClass]
+  predictionX <- toExaoneMatrix(data)
+  prediction$value <- as.numeric(exaone$predict_exaone_tabular(model, predictionX))
   prediction <- prediction %>%
     dplyr::select(-"rowId") %>%
     dplyr::rename(rowId = "originalRowId")

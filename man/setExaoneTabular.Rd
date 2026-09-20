@@ -4,10 +4,10 @@
 \alias{setExaoneTabular}
 \title{Create EXAONE-Tabular Settings}
 \usage{
-setExaoneTabular(device = "cpu", seed = 0L)
+setExaoneTabular(device = "cuda", seed = 0L)
 }
 \arguments{
-\item{device}{Device used by EXAONE-Tabular, for example "cpu" or "cuda".}
+\item{device}{Device used by EXAONE-Tabular, for example "cuda" (default) or "cpu".}
 
 \item{seed}{Random seed for the model.}
 }
