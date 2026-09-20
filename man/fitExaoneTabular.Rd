@@ -21,5 +21,6 @@ fitExaoneTabular(trainData, modelSettings, analysisId, analysisPath, ...)
 A plpModel object.
 }
 \description{
-Fits EXAONE-Tabular through PLP's classifier workflow.
+Fits EXAONE-Tabular through the shared in-context estimator.
+Retained for model settings created before the shared estimator was introduced.
 }

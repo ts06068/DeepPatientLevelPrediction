@@ -43,15 +43,16 @@ setExaoneTabular <- function(device = "cuda", seed = 0L) {
   }
 
   results <- list(
-    fitFunction = "DeepPatientLevelPrediction::fitExaoneTabular",
+    fitFunction = "DeepPatientLevelPrediction::fitInContextEstimator",
     param = list(list(device = device)),
     settings = list(
       modelName = "EXAONETabular",
+      pythonModule = "ExaoneTabular",
       modelType = "binary",
       seed = as.integer(seed),
       prepareData = "toSparseM",
       requiresDenseMatrix = TRUE,
-      predict = "DeepPatientLevelPrediction::predictExaoneTabular",
+      predict = "DeepPatientLevelPrediction::predictInContextEstimator",
       saveType = "file"
     )
   )
@@ -61,7 +62,8 @@ setExaoneTabular <- function(device = "cuda", seed = 0L) {
 
 #' Fit EXAONE-Tabular
 #'
-#' @description Fits EXAONE-Tabular through PLP's classifier workflow.
+#' @description Fits EXAONE-Tabular through the shared in-context estimator.
+#' Retained for model settings created before the shared estimator was introduced.
 #' @param trainData The training data.
 #' @param modelSettings A modelSettings object.
 #' @param analysisId Id of the analysis.
@@ -70,117 +72,24 @@ setExaoneTabular <- function(device = "cuda", seed = 0L) {
 #' @return A plpModel object.
 #' @export
 fitExaoneTabular <- function(trainData, modelSettings, analysisId, analysisPath, ...) {
-  if ("timeId" %in% names(trainData$covariateData$covariates)) {
-    stop("EXAONE-Tabular requires non-temporal covariates")
-  }
-
-  # PLP's CV callbacks accept functions; persist the named entry points instead
-  # of serializing closures into the model design.
-  classifierSettings <- modelSettings
-  classifierSettings$fitFunction <- NULL
-  classifierSettings$settings$train <- trainExaoneTabular
-  classifierSettings$settings$predict <- predictExaoneTabular
-  classifierSettings$settings$variableImportance <- varImpExaoneTabular
-  result <- PatientLevelPrediction::fitPlp(
-    trainData = trainData,
-    modelSettings = classifierSettings,
-    analysisId = analysisId,
-    analysisPath = analysisPath,
-    ...
-  )
-  result$modelDesign$modelSettings <- modelSettings
-
-  modelLocation <- PatientLevelPrediction::createTempModelLoc()
-  dir.create(modelLocation, recursive = TRUE, showWarnings = FALSE)
-  path <- system.file("python", package = "DeepPatientLevelPrediction")
-  exaone <- reticulate::import_from_path("ExaoneTabular", path = path)
-  exaone$save_exaone_tabular(
-    result$model,
-    file.path(modelLocation, "ExaoneTabularModel.pt")
-  )
-  result$model <- modelLocation
-  return(result)
-}
-
-trainExaoneTabular <- function(dataMatrix, labels, hyperParameters, settings) {
-  if (anyNA(labels$outcomeCount) || !all(labels$outcomeCount %in% c(0, 1))) {
-    stop("EXAONE-Tabular requires binary outcomeCount values (0 or 1)")
-  }
-  path <- system.file("python", package = "DeepPatientLevelPrediction")
-  exaone <- reticulate::import_from_path("ExaoneTabular", path = path)
-  trainX <- toExaoneMatrix(dataMatrix)
-  trainY <- as.array(labels$outcomeCount)
-  model <- exaone$fit_exaone_tabular(
-    features = trainX,
-    targets = trainY,
-    device = hyperParameters$device,
-    seed = settings$seed
-  )
-  return(model)
+  modelSettings$settings$pythonModule <- "ExaoneTabular"
+  fitInContextEstimator(trainData, modelSettings, analysisId, analysisPath, ...)
 }
 
 #' Predict with EXAONE-Tabular
 #'
 #' @description Returns the probability of outcome 1 in cohort row order.
+#' Retained so previously saved EXAONE-Tabular models can still be used.
 #' @param plpModel The plpModel or fitted Python classifier.
 #' @param data The plpData or covariate matrix.
 #' @param cohort Data frame identifying the prediction rows.
 #' @return The cohort with predicted probabilities in the value column.
 #' @export
 predictExaoneTabular <- function(plpModel, data, cohort) {
-  path <- system.file("python", package = "DeepPatientLevelPrediction")
-  exaone <- reticulate::import_from_path("ExaoneTabular", path = path)
-  if (inherits(data, "plpData")) {
-    matrixObjects <- PatientLevelPrediction::toSparseM(
-      plpData = data,
-      cohort = cohort,
-      map = plpModel$covariateImportance %>%
-        dplyr::select("columnId", "covariateId")
-    )
-    data <- matrixObjects$dataMatrix
-    cohort <- matrixObjects$labels
-  }
-
   if (inherits(plpModel, "plpModel")) {
-    model <- plpModel$model
-    if (is.character(model)) {
-      model <- exaone$load_exaone_tabular(
-        file.path(model, "ExaoneTabularModel.pt")
-      )
-    }
+    plpModel$modelDesign$modelSettings$settings$pythonModule <- "ExaoneTabular"
   } else {
-    model <- plpModel
+    plpModel <- list(model = plpModel, pythonModule = "ExaoneTabular")
   }
-
-  prediction <- cohort
-  predictionX <- toExaoneMatrix(data)
-  prediction$value <- as.numeric(exaone$predict_exaone_tabular(model, predictionX))
-  prediction <- prediction %>%
-    dplyr::select(-"rowId") %>%
-    dplyr::rename(rowId = "originalRowId")
-  attr(prediction, "metaData")$modelType <- "binary"
-  return(prediction)
-}
-
-toExaoneMatrix <- function(data) {
-  denseSize <- prod(as.double(dim(data))) * 8 / 1024^2
-  ParallelLogger::logInfo(paste0(
-    "EXAONE-Tabular dense input: ", nrow(data), " x ", ncol(data),
-    " (", round(denseSize, 2), " MiB per float64 matrix)"
-  ))
-  return(reticulate::r_to_py(as.matrix(data)))
-}
-
-varImpExaoneTabular <- function(model, covariateMap) {
-  selectedColumns <- model$selected_feature_indices_
-  if (is.null(selectedColumns)) {
-    selectedColumns <- seq_len(nrow(covariateMap)) - 1L
-  }
-  covariateMap$included <- as.integer(
-    covariateMap$columnId %in% (selectedColumns + 1L)
-  )
-  # The public API exposes selected columns, not variable importance scores.
-  # PLP uses zero when a model does not provide importance scores.
-  covariateMap$covariateValue <- 0
-  return(covariateMap %>% dplyr::select("covariateId", "covariateValue", "included"))
+  predictInContextEstimator(plpModel, data, cohort)
 }
