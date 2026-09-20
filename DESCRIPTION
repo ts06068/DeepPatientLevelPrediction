@@ -20,7 +20,7 @@ Depends:
 Imports:
     dplyr,
     ParallelLogger (>= 2.0.0),
-    PatientLevelPrediction (>= 6.5.0),
+    PatientLevelPrediction (>= 6.6.0),
     rlang,
     withr,
     reticulate (>= 1.41)
